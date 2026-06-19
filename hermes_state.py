@@ -33,6 +33,11 @@ def _delegate_from_json(col: str = "model_config") -> str:
     return f"json_extract(COALESCE({col}, '{{}}'), '$._delegate_from')"
 
 
+def _cwd_prefix_clause(cwd_prefix: str) -> Tuple[str, List[str]]:
+    prefix = cwd_prefix.rstrip("/\\") or cwd_prefix
+    return "(s.cwd = ? OR s.cwd LIKE ? OR s.cwd LIKE ?)", [prefix, f"{prefix}/%", f"{prefix}\\%"]
+
+
 # A child session counts as a /branch (kept visible, never cascade-deleted) if
 # it carries the stable marker OR the legacy end_reason heuristic holds.
 _BRANCH_CHILD_SQL = (
@@ -530,6 +535,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     cache_write_tokens INTEGER DEFAULT 0,
     reasoning_tokens INTEGER DEFAULT 0,
     cwd TEXT,
+    git_branch TEXT,
     billing_provider TEXT,
     billing_base_url TEXT,
     billing_mode TEXT,
@@ -1339,13 +1345,29 @@ class SessionDB:
             )
         self._execute_write(_do)
 
-    def update_session_cwd(self, session_id: str, cwd: str) -> None:
-        """Persist the session working directory when a frontend knows it."""
+    def update_session_cwd(self, session_id: str, cwd: str, git_branch: str = None) -> None:
+        """Persist the session working directory when a frontend knows it.
+
+        ``git_branch`` records the git branch checked out in ``cwd`` at the time
+        the session started/resumed. The sidebar groups main-checkout sessions
+        by this so feature-branch work doesn't pile under a single "main" row
+        (the main checkout's *current* branch is transient and would
+        misattribute past sessions). Only written when non-empty so a probe
+        failure never clobbers a previously-captured branch.
+        """
         if not session_id or not cwd:
             return
 
+        branch = (git_branch or "").strip()
+
         def _do(conn):
-            conn.execute("UPDATE sessions SET cwd = ? WHERE id = ?", (cwd, session_id))
+            if branch:
+                conn.execute(
+                    "UPDATE sessions SET cwd = ?, git_branch = ? WHERE id = ?",
+                    (cwd, branch, session_id),
+                )
+            else:
+                conn.execute("UPDATE sessions SET cwd = ? WHERE id = ?", (cwd, session_id))
 
         self._execute_write(_do)
     # ──────────────────────────────────────────────────────────────────────
@@ -1981,6 +2003,7 @@ class SessionDB:
         self,
         source: str = None,
         exclude_sources: List[str] = None,
+        cwd_prefix: str = None,
         limit: int = 20,
         offset: int = 0,
         include_children: bool = False,
@@ -2046,6 +2069,10 @@ class SessionDB:
             placeholders = ",".join("?" for _ in exclude_sources)
             where_clauses.append(f"s.source NOT IN ({placeholders})")
             params.extend(exclude_sources)
+        if cwd_prefix:
+            clause, clause_params = _cwd_prefix_clause(cwd_prefix)
+            where_clauses.append(clause)
+            params.extend(clause_params)
         if min_message_count > 0:
             where_clauses.append("s.message_count >= ?")
             params.append(min_message_count)
@@ -3671,6 +3698,7 @@ class SessionDB:
     def session_count(
         self,
         source: str = None,
+        cwd_prefix: str = None,
         min_message_count: int = 0,
         include_archived: bool = False,
         archived_only: bool = False,
@@ -3707,6 +3735,10 @@ class SessionDB:
             placeholders = ",".join("?" for _ in exclude_sources)
             where_clauses.append(f"s.source NOT IN ({placeholders})")
             params.extend(exclude_sources)
+        if cwd_prefix:
+            clause, clause_params = _cwd_prefix_clause(cwd_prefix)
+            where_clauses.append(clause)
+            params.extend(clause_params)
         if min_message_count > 0:
             where_clauses.append("s.message_count >= ?")
             params.append(min_message_count)

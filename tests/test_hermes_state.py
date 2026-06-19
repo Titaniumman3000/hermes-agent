@@ -82,6 +82,33 @@ class TestSessionLifecycle:
     def test_get_nonexistent_session(self, db):
         assert db.get_session("nonexistent") is None
 
+    def test_update_session_cwd_persists_git_branch(self, db):
+        db.create_session(session_id="s1", source="cli")
+        db.update_session_cwd("s1", "/work/repo", git_branch="pets-feature")
+
+        session = db.get_session("s1")
+        assert session["cwd"] == "/work/repo"
+        assert session["git_branch"] == "pets-feature"
+
+    def test_update_session_cwd_empty_branch_does_not_clobber(self, db):
+        """A failed branch probe (empty string) must not wipe a branch we
+        already captured — only the cwd updates."""
+        db.create_session(session_id="s1", source="cli")
+        db.update_session_cwd("s1", "/work/repo", git_branch="main")
+        db.update_session_cwd("s1", "/work/repo", git_branch="")
+
+        session = db.get_session("s1")
+        assert session["git_branch"] == "main"
+
+    def test_update_session_cwd_without_branch_arg(self, db):
+        """Back-compat: callers that pass only (id, cwd) still work."""
+        db.create_session(session_id="s1", source="cli")
+        db.update_session_cwd("s1", "/work/repo")
+
+        session = db.get_session("s1")
+        assert session["cwd"] == "/work/repo"
+        assert session["git_branch"] is None
+
     def test_end_session(self, db):
         db.create_session(session_id="s1", source="cli")
         db.end_session("s1", end_reason="user_exit")
@@ -1350,6 +1377,13 @@ class TestCounts:
         db.create_session(session_id="s3", source="cli")
         assert db.session_count(source="cli") == 2
         assert db.session_count(source="telegram") == 1
+
+    def test_session_count_by_cwd_prefix(self, db):
+        db.create_session("s1", "cli", cwd="/repo")
+        db.create_session("s2", "cli", cwd="/repo-wt-feature")
+        db.create_session("s3", "cli", cwd="/repo/subdir")
+
+        assert db.session_count(cwd_prefix="/repo") == 2
 
     def test_message_count_total(self, db):
         assert db.message_count() == 0
@@ -2798,6 +2832,14 @@ class TestListSessionsRich:
         sessions = db.list_sessions_rich(source="cli")
         assert len(sessions) == 1
         assert sessions[0]["id"] == "s1"
+
+    def test_rich_list_cwd_prefix_filter(self, db):
+        db.create_session("s1", "cli", cwd="/repo")
+        db.create_session("s2", "cli", cwd="/repo/subdir")
+        db.create_session("s3", "cli", cwd="/repo-wt-feature")
+
+        sessions = db.list_sessions_rich(cwd_prefix="/repo")
+        assert [session["id"] for session in sessions] == ["s2", "s1"]
 
     def test_preview_newlines_collapsed(self, db):
         db.create_session("s1", "cli")
