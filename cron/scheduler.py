@@ -1163,8 +1163,8 @@ def _build_job_prompt(job: dict, prerun_script: Optional[tuple] = None) -> str:
                 if not output_files:
                     continue  # silent skip — no output yet
                 latest_output = output_files[0].read_text(encoding="utf-8").strip()
-                # Truncate to 8K characters to avoid prompt bloat
-                _MAX_CONTEXT_CHARS = 8000
+               # Max chars for context_from output injection into cron prompts
+                _MAX_CONTEXT_CHARS = 204800
                 if len(latest_output) > _MAX_CONTEXT_CHARS:
                     latest_output = latest_output[:_MAX_CONTEXT_CHARS] + "\n\n[... output truncated ...]"
                 if latest_output:

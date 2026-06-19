@@ -224,10 +224,10 @@ class TestTruncateSnapshot:
 
     def test_long_snapshot_truncated_at_line_boundary(self):
         from tools.browser_tool import _truncate_snapshot
-        # Create a snapshot that exceeds 8000 chars
-        lines = [f'- item "Element {i}" [ref=e{i}]' for i in range(500)]
+        # Create a snapshot that exceeds 204800 chars
+        lines = [f'- item "Element {i}" [ref=e{i}]' for i in range(5500)]
         snapshot = "\n".join(lines)
-        assert len(snapshot) > 8000
+        assert len(snapshot) > 204800
 
         result = _truncate_snapshot(snapshot, max_chars=200)
         assert len(result) <= 300  # some margin for the truncation note
